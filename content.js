@@ -273,9 +273,18 @@
 
     const all = container.querySelectorAll("input, textarea, select");
     for (const el of all) {
-      if (!isVisible(el)) continue;
       if (el.disabled || el.readOnly) continue;
       if (el.type === "hidden") continue;
+
+      // Radio/checkbox: many sites visually hide the real <input> and
+      // present a styled label / circle. We require only that the input's
+      // presentation (label or some ancestor) is visible — not the input
+      // itself.
+      if (el.type === "radio" || el.type === "checkbox") {
+        if (!hasVisiblePresentation(el)) continue;
+      } else {
+        if (!isVisible(el)) continue;
+      }
 
       if (el.type === "radio") {
         const key = el.name || "_radio_" + id;
@@ -314,6 +323,7 @@
         label: nearestLabel(el),
         value: el.value,
         el,
+        clickTarget: clickTargetFor(el),
       }));
       items.push({
         id: ++id,
@@ -329,6 +339,7 @@
         label: nearestLabel(el),
         value: el.value,
         el,
+        clickTarget: clickTargetFor(el),
       }));
       items.push({
         id: ++id,
@@ -340,6 +351,54 @@
     }
 
     return items;
+  }
+
+  // For radio/checkbox: returns true if there's a visible label or ancestor
+  // that the user can interact with, even if the <input> itself is hidden.
+  function hasVisiblePresentation(el) {
+    // Explicit <label for=id>
+    if (el.id) {
+      const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (lbl && isVisible(lbl)) return true;
+    }
+    // Wrapping <label>
+    let p = el.parentElement;
+    for (let i = 0; i < 6 && p; i++) {
+      if (p.tagName === "LABEL" && isVisible(p)) return true;
+      p = p.parentElement;
+    }
+    // Any ancestor that's visibly sized within ~250px of the input
+    p = el.parentElement;
+    for (let i = 0; i < 8 && p; i++) {
+      if (isVisible(p)) {
+        const r = p.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) return true;
+      }
+      p = p.parentElement;
+    }
+    return false;
+  }
+
+  // For radio/checkbox: returns the best DOM element to click. Prefers the
+  // associated <label> when the input itself is hidden.
+  function clickTargetFor(el) {
+    if (isVisible(el)) return el;
+    if (el.id) {
+      const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (lbl && isVisible(lbl)) return lbl;
+    }
+    let p = el.parentElement;
+    for (let i = 0; i < 6 && p; i++) {
+      if (p.tagName === "LABEL" && isVisible(p)) return p;
+      p = p.parentElement;
+    }
+    // Fallback: nearest visible ancestor.
+    p = el.parentElement;
+    for (let i = 0; i < 6 && p; i++) {
+      if (isVisible(p)) return p;
+      p = p.parentElement;
+    }
+    return el;
   }
 
   function nearestLabel(el) {
@@ -517,8 +576,10 @@
           const idx = Number(a.value);
           const opt = item.options[idx];
           if (opt?.el) {
-            await humanClick(opt.el);
+            const target = opt.clickTarget || opt.el;
+            await humanClick(target);
             opt.el.checked = true;
+            opt.el.dispatchEvent(new Event("input", { bubbles: true }));
             opt.el.dispatchEvent(new Event("change", { bubbles: true }));
             applied++;
           }
@@ -531,8 +592,10 @@
           for (const idx of indices) {
             const opt = item.options[idx];
             if (opt?.el) {
-              await humanClick(opt.el);
+              const target = opt.clickTarget || opt.el;
+              await humanClick(target);
               opt.el.checked = true;
+              opt.el.dispatchEvent(new Event("input", { bubbles: true }));
               opt.el.dispatchEvent(new Event("change", { bubbles: true }));
               applied++;
             }
