@@ -102,14 +102,31 @@
 
   async function humanClick(el) {
     if (!el) return false;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    try { el.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (_) {}
     await sleep(randInt(200, 600));
-    el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const mk = (type) => new MouseEvent(type, {
+      bubbles: true, cancelable: true, view: window,
+      clientX: cx, clientY: cy, button: 0,
+    });
+    const pk = (type) => new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerType: "mouse",
+      clientX: cx, clientY: cy, button: 0, isPrimary: true,
+    });
+    el.dispatchEvent(pk("pointerover"));
+    el.dispatchEvent(mk("mouseover"));
+    el.dispatchEvent(pk("pointerenter"));
     await sleep(randInt(50, 150));
-    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    try { if (typeof el.focus === "function") el.focus(); } catch (_) {}
+    el.dispatchEvent(pk("pointerdown"));
+    el.dispatchEvent(mk("mousedown"));
     await sleep(randInt(30, 80));
-    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-    el.click();
+    el.dispatchEvent(pk("pointerup"));
+    el.dispatchEvent(mk("mouseup"));
+    el.dispatchEvent(mk("click"));
+    try { el.click(); } catch (_) {}
     return true;
   }
 
@@ -167,22 +184,33 @@
     return String(s || "").toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim();
   }
 
-  function findButtonByTexts(texts) {
+  function findButtonByTexts(texts, root) {
     const wanted = texts.map(norm);
-    const candidates = document.querySelectorAll(
+    const scope = root || document;
+    const candidates = scope.querySelectorAll(
       "button, input[type=button], input[type=submit], a[role=button], .button, [class*=button], [class*=btn]"
     );
+    // Prefer exact matches over substring matches; prefer real <button>/inputs
+    // over generic <div class="...btn..."> wrappers.
+    const matches = [];
     for (const el of candidates) {
       if (!isVisible(el)) continue;
       const label = norm(visibleText(el) || el.value || el.getAttribute("aria-label") || "");
       if (!label) continue;
+      let score = -1;
       for (const w of wanted) {
-        if (label === w || label.startsWith(w) || label.includes(w)) {
-          return el;
-        }
+        if (label === w) { score = 3; break; }
+        if (label.startsWith(w)) { score = Math.max(score, 2); }
+        else if (label.includes(w)) { score = Math.max(score, 1); }
       }
+      if (score < 0) continue;
+      // Bonus for real form-submitting elements.
+      const tag = el.tagName.toLowerCase();
+      const isReal = tag === "button" || tag === "input";
+      matches.push({ el, score: score * 2 + (isReal ? 1 : 0) });
     }
-    return null;
+    matches.sort((a, b) => b.score - a.score);
+    return matches.length ? matches[0].el : null;
   }
 
   // -----------------------------
@@ -774,16 +802,54 @@
 
     await humanPause();
 
-    // Re-locate the check button in case the DOM was reshuffled after we
-    // typed into inputs (rare but happens when sites re-render on change).
-    const submitBtn = findButtonByTexts(BTN_CHECK) || checkBtn;
-    if (submitBtn && isVisible(submitBtn)) {
-      await humanClick(submitBtn);
-      log("Нажал «Проверить»", "success");
-      state.stats.solved++;
-    } else {
-      log("Не нашёл кнопку «Проверить» после заполнения", "warn");
+    // If the user pressed Stop while we were waiting / talking to Gemini,
+    // bail out before clicking submit.
+    if (!state.running) {
+      log("Остановлено пользователем — не нажимаю «Проверить»", "warn");
+      return;
     }
+
+    // Re-locate the check button in case the DOM was reshuffled after we
+    // typed into inputs. Restrict to the task container first to avoid
+    // accidentally picking up unrelated navigation buttons elsewhere on the
+    // page. Fall back to a global search if nothing is found.
+    const submitBtn =
+      findButtonByTexts(BTN_CHECK, container) ||
+      findButtonByTexts(BTN_CHECK) ||
+      checkBtn;
+    if (!submitBtn || !isVisible(submitBtn)) {
+      log("Не нашёл кнопку «Проверить» после заполнения", "warn");
+      return;
+    }
+
+    log(`Кликаю «${visibleText(submitBtn).slice(0, 40)}» (${submitBtn.tagName.toLowerCase()})`, "info");
+    await humanClick(submitBtn);
+
+    // Fallback: if humanClick didn't trigger a form submission (button still
+    // visible after 700ms), try submitting the parent form directly.
+    await sleep(700);
+    if (isVisible(submitBtn) && submitBtn.isConnected) {
+      const form = submitBtn.closest("form");
+      if (form) {
+        try {
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit(submitBtn);
+            log("Резерв: form.requestSubmit()", "info");
+          } else {
+            form.submit();
+            log("Резерв: form.submit()", "info");
+          }
+        } catch (e) {
+          log("requestSubmit ошибка: " + e.message, "warn");
+        }
+      } else {
+        // No form wrapper — try a second, very direct click via .click().
+        try { submitBtn.click(); } catch (_) {}
+      }
+    }
+
+    log("Нажал «Проверить»", "success");
+    state.stats.solved++;
   }
 
   // Robustly check a radio / checkbox option: click the visible target,
