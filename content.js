@@ -224,7 +224,9 @@
       "button, input[type=button], input[type=submit], a[role=button], .button, [class*=button], [class*=btn]"
     );
     // Prefer exact matches over substring matches; prefer real <button>/inputs
-    // over generic <div class="...btn..."> wrappers.
+    // over generic <div class="...btn..."> wrappers. For very short keywords
+    // (<= 4 chars) we require word-boundary matches so e.g. "ок" doesn't match
+    // "блок" or "урок".
     const matches = [];
     for (const el of candidates) {
       if (!isVisible(el)) continue;
@@ -233,8 +235,14 @@
       let score = -1;
       for (const w of wanted) {
         if (label === w) { score = 3; break; }
-        if (label.startsWith(w)) { score = Math.max(score, 2); }
-        else if (label.includes(w)) { score = Math.max(score, 1); }
+        if (w.length <= 4) {
+          // Word-boundary match only.
+          const re = new RegExp("(^|\\s)" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\s|$|[?!.,:;])");
+          if (re.test(label)) { score = Math.max(score, 2); }
+        } else {
+          if (label.startsWith(w)) { score = Math.max(score, 2); }
+          else if (label.includes(w)) { score = Math.max(score, 1); }
+        }
       }
       if (score < 0) continue;
       // Bonus for real form-submitting elements.
@@ -258,11 +266,40 @@
   // We also detect the task pane to extract content from.
 
   const BTN_NEXT = ["следующее задание", "следующий шаг", "продолжить", "далее", "дальше", "к следующему", "next step", "next"];
-  const BTN_THEORY_READ = ["прочитано", "прочитать", "я прочитал", "понятно"];
+  const BTN_THEORY_READ = [
+    "прочитано", "прочитал", "я прочитал", "я прочитал(а)",
+    "понятно", "я понял", "я понял(а)",
+  ];
   const BTN_CHECK = ["проверить", "ответить", "отправить ответ", "check", "submit"];
   const BTN_FINISH = ["закончить попытку", "завершить попытку", "завершить", "закончить", "finish"];
 
+  // Buttons that mean "the test is over, return to the list". Their
+  // presence is one of the signals for `isResultsPage()`.
+  const BTN_RETURN_TO_LIST = [
+    "вернуться к списку работ", "вернуться к списку",
+    "пройти заново", "к списку работ",
+  ];
+
+  // Detect that we are on the final “test results” page («Результаты
+  // тестирования: Всё верно … Заработано баллов»). We use two
+  // independent signals so transient inline feedback won't trigger this.
+  function isResultsPage() {
+    const bodyTxt = norm(document.body?.innerText || "");
+    const hints = [
+      "результаты тестирования",
+      "заработано баллов",
+      "затраченное время",
+      "попыток осталось",
+      "ваш результат",
+    ];
+    const matched = hints.filter((h) => bodyTxt.includes(h)).length;
+    const hasReturnBtn = !!findButtonByTexts(BTN_RETURN_TO_LIST);
+    return matched >= 2 || (matched >= 1 && hasReturnBtn);
+  }
+
   function detectAction() {
+    if (isResultsPage()) return { type: "results" };
+
     const finishBtn = findButtonByTexts(BTN_FINISH);
     const nextBtn = findButtonByTexts(BTN_NEXT);
     const readBtn = findButtonByTexts(BTN_THEORY_READ);
@@ -729,6 +766,14 @@
         const action = detectAction();
         log("Действие: " + action.type, "info");
 
+        if (action.type === "results") {
+          log("Страница результатов теста — работа завершена.", "success");
+          state.running = false;
+          state.stats.status = "stopped";
+          setAutorun(false);
+          break;
+        }
+
         if (action.type === "unknown") {
           // Wait and retry; this happens during navigations.
           await sleep(1500);
@@ -784,8 +829,34 @@
     return false;
   }
 
+  // Scroll through the task container so any IntersectionObserver-driven
+  // lazy-loaded content (images, math formulas, options) gets rendered
+  // before we try to parse it. Then scroll back to the top so subsequent
+  // clicks land on visible elements.
+  async function prepareTaskView(container) {
+    try {
+      const startY = window.scrollY;
+      const rect = container.getBoundingClientRect();
+      const containerTop = window.scrollY + rect.top;
+      const containerBottom = containerTop + container.scrollHeight;
+      // Step from top to bottom in a few stops.
+      const steps = 4;
+      for (let i = 0; i <= steps; i++) {
+        const y = containerTop + ((containerBottom - containerTop) * i) / steps;
+        window.scrollTo({ top: y, behavior: "instant" in window ? "auto" : "auto" });
+        await sleep(120);
+      }
+      // Park ourselves a bit above the container so the user can see what's
+      // happening when watching.
+      window.scrollTo({ top: Math.max(containerTop - 60, 0), behavior: "auto" });
+      await sleep(150);
+      void startY; // not restoring intentionally
+    } catch (_) {}
+  }
+
   async function handleTask(checkBtn) {
     const container = findTaskContainer(checkBtn);
+    await prepareTaskView(container);
     const formItems = extractFormElements(container);
     tagFormItems(formItems);
     let questionText;

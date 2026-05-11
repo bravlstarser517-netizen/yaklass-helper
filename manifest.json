@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ЯКласс Помощник (Gemini)",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Автоматически выполняет задания и проходит теорию на yaklass.ru с помощью Google Gemini.",
   "permissions": ["storage", "scripting", "activeTab", "tabs"],
   "host_permissions": [
