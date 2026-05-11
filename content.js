@@ -207,11 +207,13 @@
     const readBtn = findButtonByTexts(BTN_THEORY_READ);
     const checkBtn = findButtonByTexts(BTN_CHECK);
 
-    // Order matters: prefer advancing to next page if available,
-    // then dismiss "read" on theory, then solve a task.
-    if (nextBtn) return { type: "next", btn: nextBtn };
-    if (readBtn) return { type: "theory", btn: readBtn };
+    // Order matters: always try to solve the current task first; only when
+    // there's no task to solve and no theory to dismiss do we navigate.
+    // (yaklass keeps a permanent "Следующее задание" link at the bottom
+    // of every task page, which used to short-circuit the task handler.)
     if (checkBtn) return { type: "task", btn: checkBtn };
+    if (readBtn) return { type: "theory", btn: readBtn };
+    if (nextBtn) return { type: "next", btn: nextBtn };
     if (finishBtn) return { type: "finish", btn: finishBtn };
 
     return { type: "unknown" };
@@ -441,10 +443,43 @@
   // -----------------------------
   // Extracting question text (and images)
   // -----------------------------
+  // Tag each form-control element with a data-ykid attribute matching its
+  // position in formItems. We use these tags in extractQuestionText() to
+  // substitute each input/select with a [#N] placeholder so Gemini can
+  // unambiguously map answers back to inputs even when they are interleaved
+  // with body text (e.g. fill-in-the-blank questions).
+  function tagFormItems(formItems) {
+    for (const it of formItems) {
+      if (it.kind === "single_choice" || it.kind === "multi_choice") {
+        // Tag each option's underlying input.
+        for (let i = 0; i < it.options.length; i++) {
+          const opt = it.options[i];
+          if (opt?.el) opt.el.dataset.ykid = `${it.id}.${i}`;
+        }
+      } else if (it.el) {
+        it.el.dataset.ykid = String(it.id);
+      }
+    }
+  }
+
+  function clearFormItemTags(formItems) {
+    for (const it of formItems) {
+      if (it.kind === "single_choice" || it.kind === "multi_choice") {
+        for (const opt of it.options) {
+          if (opt?.el && opt.el.dataset) delete opt.el.dataset.ykid;
+        }
+      } else if (it.el && it.el.dataset) {
+        delete it.el.dataset.ykid;
+      }
+    }
+  }
+
   function extractQuestionText(container) {
-    // Clone and strip script/style/inputs/buttons to get readable text.
+    // Clone and strip script/style/buttons to get readable text. We keep
+    // form-control nodes around so we can substitute them with positional
+    // markers — they are removed afterwards.
     const clone = container.cloneNode(true);
-    clone.querySelectorAll("script, style, button, input, textarea, select, .answer-area, [class*=answer-area]").forEach((n) => n.remove());
+    clone.querySelectorAll("script, style, button, .answer-area, [class*=answer-area]").forEach((n) => n.remove());
     // Replace MathJax/KaTeX with LaTeX where possible.
     clone.querySelectorAll("script[type='math/tex'], annotation[encoding='application/x-tex']").forEach((node) => {
       const tex = node.textContent || "";
@@ -452,6 +487,15 @@
       span.textContent = "$" + tex + "$";
       node.replaceWith(span);
     });
+    // Replace tagged inputs/selects with [#N] placeholders.
+    clone.querySelectorAll("[data-ykid]").forEach((el) => {
+      const ykid = el.dataset.ykid;
+      const span = document.createElement("span");
+      span.textContent = ` [#${ykid}] `;
+      el.replaceWith(span);
+    });
+    // Drop any remaining form controls that weren't tagged.
+    clone.querySelectorAll("input, textarea, select").forEach((n) => n.remove());
     const txt = (clone.innerText || clone.textContent || "")
       .replace(/\u00a0/g, " ")
       .replace(/[ \t]+/g, " ")
@@ -523,6 +567,11 @@
       "Ты решаешь задание из российской школьной онлайн-платформы (yaklass.ru) для 5–11 классов.",
       "Прочитай условие задачи и заполни форму ответа. Отвечай ТОЛЬКО валидным JSON по схеме ниже, без пояснений.",
       "",
+      "В тексте условия встречаются маркеры вида [#N] (напр. [#1], [#2]) — это",
+      "места, куда нужно вписать ответ. Номер в маркере соответствует id элемента",
+      "в форме ответа ниже. Для вариантов выбора маркер может быть [#N.M]",
+      "(N=id группы, M=индекс варианта). Строго сопоставляй ответы id-ам.",
+      "",
       "СХЕМА ОТВЕТА:",
       "{",
       '  "answers": [',
@@ -576,27 +625,22 @@
           const idx = Number(a.value);
           const opt = item.options[idx];
           if (opt?.el) {
-            const target = opt.clickTarget || opt.el;
-            await humanClick(target);
-            opt.el.checked = true;
-            opt.el.dispatchEvent(new Event("input", { bubbles: true }));
-            opt.el.dispatchEvent(new Event("change", { bubbles: true }));
+            await checkRadioOrBox(opt);
             applied++;
           }
         } else if (item.kind === "multi_choice") {
           const indices = Array.isArray(a.value) ? a.value.map(Number) : [Number(a.value)];
+          // Uncheck all first
           for (const opt of item.options) {
-            opt.el.checked = false;
-            opt.el.dispatchEvent(new Event("change", { bubbles: true }));
+            if (opt.el?.checked) {
+              opt.el.checked = false;
+              opt.el.dispatchEvent(new Event("change", { bubbles: true }));
+            }
           }
           for (const idx of indices) {
             const opt = item.options[idx];
             if (opt?.el) {
-              const target = opt.clickTarget || opt.el;
-              await humanClick(target);
-              opt.el.checked = true;
-              opt.el.dispatchEvent(new Event("input", { bubbles: true }));
-              opt.el.dispatchEvent(new Event("change", { bubbles: true }));
+              await checkRadioOrBox(opt);
               applied++;
             }
           }
@@ -680,15 +724,21 @@
 
   async function handleTask(checkBtn) {
     const container = findTaskContainer(checkBtn);
-    const questionText = extractQuestionText(container);
     const formItems = extractFormElements(container);
+    tagFormItems(formItems);
+    let questionText;
+    try {
+      questionText = extractQuestionText(container);
+    } finally {
+      clearFormItemTags(formItems);
+    }
 
     if (!questionText.trim() && !formItems.length) {
       log("Пустой контейнер задания, пропускаю", "warn");
       return;
     }
 
-    log(`Задание (${formItems.length} полей): ${questionText.slice(0, 80)}...`, "info");
+    log(`Задание (${formItems.length} полей): ${questionText.slice(0, 120)}`, "info");
     const images = await extractImages(container);
 
     const prompt = buildPrompt(questionText, formItems);
@@ -699,7 +749,7 @@
       const resp = await chrome.runtime.sendMessage({
         type: "GEMINI_REQUEST",
         payload: {
-          apiKey: state.settings.apiKey,
+          apiKeys: state.settings.apiKeys,
           model: state.settings.model,
           prompt,
           images,
@@ -724,11 +774,33 @@
 
     await humanPause();
 
-    // Submit the task.
-    if (checkBtn && isVisible(checkBtn)) {
-      await humanClick(checkBtn);
+    // Re-locate the check button in case the DOM was reshuffled after we
+    // typed into inputs (rare but happens when sites re-render on change).
+    const submitBtn = findButtonByTexts(BTN_CHECK) || checkBtn;
+    if (submitBtn && isVisible(submitBtn)) {
+      await humanClick(submitBtn);
       log("Нажал «Проверить»", "success");
       state.stats.solved++;
+    } else {
+      log("Не нашёл кнопку «Проверить» после заполнения", "warn");
     }
+  }
+
+  // Robustly check a radio / checkbox option: click the visible target,
+  // also click the input directly, force-set .checked, and dispatch the
+  // standard input/change events. Different frameworks listen to different
+  // signals; we cover all bases.
+  async function checkRadioOrBox(opt) {
+    if (!opt?.el) return;
+    const target = opt.clickTarget || opt.el;
+    try { await humanClick(target); } catch (_) {}
+    if (!opt.el.checked) {
+      try { opt.el.click(); } catch (_) {}
+    }
+    if (!opt.el.checked) {
+      opt.el.checked = true;
+    }
+    opt.el.dispatchEvent(new Event("input", { bubbles: true }));
+    opt.el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 })();

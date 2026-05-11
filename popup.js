@@ -3,8 +3,8 @@
 const $ = (id) => document.getElementById(id);
 
 const DEFAULTS = {
-  apiKey: "",
-  model: "gemini-3-flash",
+  apiKeys: [],
+  model: "gemini-flash-latest",
   speed: "normal",
   autoNext: true,
 };
@@ -18,9 +18,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   startStatusPolling();
 });
 
+function parseKeys(raw) {
+  return String(raw || "")
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 async function loadSettings() {
   const data = await chrome.storage.sync.get(DEFAULTS);
-  $("apiKey").value = data.apiKey || "";
+  // Migration: accept legacy single-key "apiKey" field.
+  let keys = Array.isArray(data.apiKeys) ? data.apiKeys : [];
+  if (!keys.length && typeof data.apiKey === "string" && data.apiKey) {
+    keys = [data.apiKey.trim()];
+  }
+  $("apiKeys").value = keys.join("\n");
   $("model").value = data.model || DEFAULTS.model;
   $("speed").value = data.speed || DEFAULTS.speed;
   $("autoNext").checked = data.autoNext !== false;
@@ -28,28 +40,25 @@ async function loadSettings() {
 
 async function saveSettings() {
   const settings = {
-    apiKey: $("apiKey").value.trim(),
+    apiKeys: parseKeys($("apiKeys").value),
     model: $("model").value,
     speed: $("speed").value,
     autoNext: $("autoNext").checked,
   };
   await chrome.storage.sync.set(settings);
-  log("Настройки сохранены", "success");
+  // Clean up legacy field if present.
+  try { await chrome.storage.sync.remove("apiKey"); } catch (_) {}
+  log(`Настройки сохранены (${settings.apiKeys.length} ключ(ей))`, "success");
   return settings;
 }
 
 function attachHandlers() {
-  $("toggleKeyVisibility").addEventListener("click", () => {
-    const input = $("apiKey");
-    input.type = input.type === "password" ? "text" : "password";
-  });
-
   $("saveBtn").addEventListener("click", saveSettings);
 
   $("startBtn").addEventListener("click", async () => {
     const settings = await saveSettings();
-    if (!settings.apiKey) {
-      log("Сначала введи Gemini API ключ", "error");
+    if (!settings.apiKeys.length) {
+      log("Сначала введи хотя бы один Gemini API ключ", "error");
       return;
     }
     const tab = await getActiveYaklassTab();

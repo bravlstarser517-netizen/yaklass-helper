@@ -8,24 +8,25 @@
 <body>
   <header>
     <h1>ЯКласс Помощник</h1>
-    <span class="version">v0.1.0</span>
+    <span class="version">v0.2.0</span>
   </header>
 
   <section class="config">
-    <label for="apiKey">Gemini API ключ</label>
-    <div class="row">
-      <input type="password" id="apiKey" placeholder="AIza...">
-      <button id="toggleKeyVisibility" class="icon-btn" title="Показать/скрыть">👁</button>
-    </div>
+    <label for="apiKeys">Gemini API ключи <small style="font-weight:400;color:#6b7280">(один на строку)</small></label>
+    <textarea id="apiKeys" rows="3" placeholder="AIza...&#10;AIza... (не обязательно)"></textarea>
     <a href="https://aistudio.google.com/apikey" target="_blank" class="hint">
       Получить ключ →
     </a>
+    <small class="hint-text">Если введёшь несколько ключей — при HTTP 429 будет автоматическая ротация.</small>
 
     <label for="model">Модель</label>
     <select id="model">
-      <option value="gemini-3-flash">gemini-3-flash (рекомендуется)</option>
-      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (быстрее, проще задачи)</option>
-      <option value="gemini-3-pro">gemini-3-pro (умнее, лимиты строже)</option>
+      <option value="gemini-flash-latest">gemini-flash-latest (рекомендуется — всегда новейший Flash)</option>
+      <option value="gemini-3-flash-preview">gemini-3-flash-preview (то же самое, явное имя)</option>
+      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (быстрее, для простых задач)</option>
+      <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (быстрее, всегда свежая lite)</option>
+      <option value="gemini-pro-latest">gemini-pro-latest (умнее, лимиты строже)</option>
+      <option value="gemini-3-pro-preview">gemini-3-pro-preview (умнее, явное имя)</option>
       <option value="gemini-2.5-flash">gemini-2.5-flash (запасной)</option>
       <option value="gemini-2.5-pro">gemini-2.5-pro (запасной)</option>
     </select>

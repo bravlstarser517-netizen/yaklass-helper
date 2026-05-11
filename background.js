@@ -7,6 +7,10 @@
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
+// Per-key cooldown after a 429 / quota error.
+const keyCooldownUntil = new Map(); // Map<key, msEpoch>
+const COOLDOWN_MS = 60_000;
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "GEMINI_REQUEST") {
     handleGeminiRequest(msg.payload)
@@ -16,11 +20,40 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-async function handleGeminiRequest({ apiKey, model, prompt, images, systemInstruction }) {
-  if (!apiKey) throw new Error("Нет API ключа Gemini");
+async function handleGeminiRequest({ apiKeys, apiKey, model, prompt, images, systemInstruction }) {
+  // Accept either an array of keys (new) or a single key (legacy).
+  const keys = Array.isArray(apiKeys) && apiKeys.length
+    ? apiKeys.slice()
+    : (apiKey ? [apiKey] : []);
+  if (!keys.length) throw new Error("Нет API ключей Gemini");
   if (!model) throw new Error("Не выбрана модель");
 
-  const url = `${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const now = Date.now();
+  // Try fresh keys first, then ones that are still cooling down.
+  const ordered = [
+    ...keys.filter((k) => (keyCooldownUntil.get(k) || 0) <= now),
+    ...keys.filter((k) => (keyCooldownUntil.get(k) || 0) > now),
+  ];
+
+  let lastErr = null;
+  for (const key of ordered) {
+    try {
+      return await callOnce({ key, model, prompt, images, systemInstruction });
+    } catch (e) {
+      lastErr = e;
+      const transient = /HTTP (?:429|5\d\d)|quota|rate/i.test(e.message);
+      if (transient) {
+        keyCooldownUntil.set(key, Date.now() + COOLDOWN_MS);
+        continue; // try next key
+      }
+      throw e; // permanent error: do not try other keys
+    }
+  }
+  throw lastErr || new Error("Все ключи исчерпаны");
+}
+
+async function callOnce({ key, model, prompt, images, systemInstruction }) {
+  const url = `${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
   const parts = [{ text: prompt }];
   if (Array.isArray(images)) {
@@ -36,7 +69,6 @@ async function handleGeminiRequest({ apiKey, model, prompt, images, systemInstru
     generationConfig: {
       response_mime_type: "application/json",
       temperature: 0.2,
-      // Allow long enough output for explanations + structured answers.
       maxOutputTokens: 4096,
     },
   };
@@ -71,18 +103,15 @@ async function handleGeminiRequest({ apiKey, model, prompt, images, systemInstru
     throw new Error(`Gemini не вернул текста (finishReason=${finishReason})`);
   }
 
-  // Try to parse JSON; if model added stray text/code fences, extract JSON.
   return parseLooseJson(textOut);
 }
 
 function parseLooseJson(text) {
-  // Strip Markdown code fences if model added them despite JSON mode.
   let cleaned = text.trim();
   cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   try {
     return JSON.parse(cleaned);
   } catch (_) {
-    // Find first { and matching last } to attempt salvage.
     const first = cleaned.indexOf("{");
     const last = cleaned.lastIndexOf("}");
     if (first !== -1 && last !== -1 && last > first) {
