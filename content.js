@@ -26,6 +26,29 @@
   const MAX_LOGS = 60;
   const MAX_SAME_FINGERPRINT = 4; // stop if page doesn't change
 
+  // Persisted across page reloads in chrome.storage.local so that the
+  // auto-run continues after every "Ответить" / "Проверить" click that
+  // triggers a full-page navigation to the next exercise.
+  const AUTORUN_KEY = "autorun";
+
+  async function setAutorun(active, settings) {
+    try {
+      const payload = active
+        ? { [AUTORUN_KEY]: { active: true, settings, t: Date.now() } }
+        : { [AUTORUN_KEY]: { active: false, t: Date.now() } };
+      await chrome.storage.local.set(payload);
+    } catch (_) {}
+  }
+
+  async function getAutorun() {
+    try {
+      const data = await chrome.storage.local.get(AUTORUN_KEY);
+      return data[AUTORUN_KEY] || { active: false };
+    } catch (_) {
+      return { active: false };
+    }
+  }
+
   // -----------------------------
   // Logging
   // -----------------------------
@@ -46,27 +69,37 @@
   // -----------------------------
   // Message handler (popup ↔ content)
   // -----------------------------
+  function startLoop(settings, resumed) {
+    if (state.running) return;
+    state.settings = settings || {};
+    state.running = true;
+    state.stats.status = "running";
+    const prefix = resumed ? "Продолжаю после перехода…" : "Запуск...";
+    log(prefix + " модель=" + state.settings.model, "info");
+    mainLoop().catch((e) => {
+      log("Цикл упал: " + e.message, "error");
+      state.running = false;
+      state.stats.status = "stopped";
+    });
+  }
+
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg?.type === "START") {
       if (state.running) {
         sendResponse({ ok: true, alreadyRunning: true });
         return;
       }
-      state.settings = msg.settings || {};
-      state.running = true;
-      state.stats.status = "running";
-      log("Запуск... модель=" + state.settings.model, "info");
-      mainLoop().catch((e) => {
-        log("Цикл упал: " + e.message, "error");
-        state.running = false;
-        state.stats.status = "stopped";
-      });
+      const settings = msg.settings || {};
+      // Persist intent so the loop survives the next page navigation.
+      setAutorun(true, settings);
+      startLoop(settings, false);
       sendResponse({ ok: true });
       return true;
     }
     if (msg?.type === "STOP") {
       state.running = false;
       state.stats.status = "stopped";
+      setAutorun(false);
       log("Остановлено", "warn");
       sendResponse({ ok: true });
       return true;
@@ -714,6 +747,7 @@
           log("Страница не меняется уже " + state.sameFingerprintCount + " попыток. Остановка.", "error");
           state.running = false;
           state.stats.status = "stopped";
+          setAutorun(false);
           break;
         }
 
@@ -869,4 +903,30 @@
     opt.el.dispatchEvent(new Event("input", { bubbles: true }));
     opt.el.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  // -----------------------------
+  // Auto-resume after page reload
+  // -----------------------------
+  // After every "Ответить"/"Проверить" click, yaklass does a full-page
+  // navigation to the next exercise. We persisted `autorun.active=true` in
+  // chrome.storage.local when the user pressed Start; on every fresh content
+  // script load we read that flag and resume the loop with the same settings.
+  (async function bootstrap() {
+    const ar = await getAutorun();
+    if (!ar.active) return;
+    // Slight delay so the new page finishes initial rendering before we
+    // start poking at it.
+    await sleep(800);
+    if (state.running) return; // shouldn't happen, but be safe
+    if (!ar.settings || !ar.settings.apiKeys || !ar.settings.apiKeys.length) {
+      // Migration path: legacy single-key sessions.
+      if (ar.settings && ar.settings.apiKey) {
+        ar.settings.apiKeys = [ar.settings.apiKey];
+      } else {
+        log("Авто-возобновление пропущено: нет сохранённых API ключей", "warn");
+        setAutorun(false);
+        return;
+      }
+    }
+    startLoop(ar.settings, true);
+  })();
 })();
