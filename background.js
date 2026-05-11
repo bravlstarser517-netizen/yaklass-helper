@@ -7,9 +7,53 @@
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
-// Per-key cooldown after a 429 / quota error.
-const keyCooldownUntil = new Map(); // Map<key, msEpoch>
-const COOLDOWN_MS = 60_000;
+// Per-key cooldown after a 429 / quota error. We persist this in
+// chrome.storage.local because Manifest V3 service workers are short-lived
+// and the in-memory Map is otherwise lost between page navigations.
+const COOLDOWN_MS = 70_000; // a bit over 60s, free-tier RPM window is ~60s
+const STORAGE_KEY = "key_cooldowns";
+
+// Minimum gap between Gemini requests, to spread load across the free-tier
+// per-minute window. Persisted across SW restarts.
+const MIN_REQUEST_INTERVAL_MS = 4_000;
+const LAST_REQUEST_KEY = "last_gemini_request";
+
+// Hard cap on how long we wait for keys to cool down inside a single call.
+const MAX_WAIT_FOR_COOLDOWN_MS = 75_000;
+
+async function readCooldowns() {
+  try {
+    const data = await chrome.storage.local.get(STORAGE_KEY);
+    return data[STORAGE_KEY] || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+async function writeCooldowns(map) {
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEY]: map });
+  } catch (_) {}
+}
+
+async function readLastRequest() {
+  try {
+    const data = await chrome.storage.local.get(LAST_REQUEST_KEY);
+    return data[LAST_REQUEST_KEY] || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function writeLastRequest(t) {
+  try {
+    await chrome.storage.local.set({ [LAST_REQUEST_KEY]: t });
+  } catch (_) {}
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "GEMINI_REQUEST") {
@@ -28,22 +72,47 @@ async function handleGeminiRequest({ apiKeys, apiKey, model, prompt, images, sys
   if (!keys.length) throw new Error("Нет API ключей Gemini");
   if (!model) throw new Error("Не выбрана модель");
 
-  const now = Date.now();
-  // Try fresh keys first, then ones that are still cooling down.
-  const ordered = [
-    ...keys.filter((k) => (keyCooldownUntil.get(k) || 0) <= now),
-    ...keys.filter((k) => (keyCooldownUntil.get(k) || 0) > now),
-  ];
+  // Throttle: ensure at least MIN_REQUEST_INTERVAL_MS between calls.
+  const last = await readLastRequest();
+  const since = Date.now() - last;
+  if (since < MIN_REQUEST_INTERVAL_MS) {
+    await sleep(MIN_REQUEST_INTERVAL_MS - since);
+  }
+
+  // Possibly wait for the soonest fresh key if every key is cooling down.
+  let cooldowns = await readCooldowns();
+  const allCoolingDown = () => keys.every((k) => (cooldowns[k] || 0) > Date.now());
+  if (allCoolingDown()) {
+    const soonest = Math.min(...keys.map((k) => cooldowns[k] || 0));
+    const waitMs = Math.min(soonest - Date.now(), MAX_WAIT_FOR_COOLDOWN_MS);
+    if (waitMs > 0) {
+      console.log(`[yaklass-helper] All keys cooling down, waiting ${Math.round(waitMs / 1000)}s`);
+      await sleep(waitMs + 250);
+      cooldowns = await readCooldowns();
+    }
+  }
 
   let lastErr = null;
+  // Try fresh keys first, then ones that are still cooling down (as a
+  // last-ditch retry — maybe quota was just refreshed).
+  const now = Date.now();
+  const ordered = [
+    ...keys.filter((k) => (cooldowns[k] || 0) <= now),
+    ...keys.filter((k) => (cooldowns[k] || 0) > now),
+  ];
+
   for (const key of ordered) {
     try {
-      return await callOnce({ key, model, prompt, images, systemInstruction });
+      await writeLastRequest(Date.now());
+      const result = await callOnce({ key, model, prompt, images, systemInstruction });
+      // Mark this key as last-used (no cooldown extension).
+      return result;
     } catch (e) {
       lastErr = e;
       const transient = /HTTP (?:429|5\d\d)|quota|rate/i.test(e.message);
       if (transient) {
-        keyCooldownUntil.set(key, Date.now() + COOLDOWN_MS);
+        cooldowns[key] = Date.now() + COOLDOWN_MS;
+        await writeCooldowns(cooldowns);
         continue; // try next key
       }
       throw e; // permanent error: do not try other keys
