@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>ЯКласс Помощник</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>ЯКласс Помощник</h1>
+    <span class="version">v0.2.5</span>
+  </header>
+
+  <section class="config">
+    <label for="apiKeys">Gemini API ключи <small style="font-weight:400;color:#6b7280">(один на строку)</small></label>
+    <textarea id="apiKeys" rows="3" placeholder="AIza...&#10;AIza... (не обязательно)"></textarea>
+    <a href="https://aistudio.google.com/apikey" target="_blank" class="hint">
+      Получить ключ →
+    </a>
+    <small class="hint-text">Если введёшь несколько ключей — при HTTP 429 будет автоматическая ротация.<br><b>Важно:</b> бесплатная квота даётся на ПРОЕКТ, не на ключ. Чтобы реально увеличить лимит — создай ключи в <b>разных проектах</b> Google Cloud (на странице aistudio: «Create API key in new project»).</small>
+
+    <label for="model">Модель</label>
+    <select id="model">
+      <option value="gemini-flash-latest">gemini-flash-latest (рекомендуется — всегда новейший Flash)</option>
+      <option value="gemini-3-flash-preview">gemini-3-flash-preview (то же самое, явное имя)</option>
+      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (быстрее, для простых задач)</option>
+      <option value="gemini-flash-lite-latest">gemini-flash-lite-latest (быстрее, всегда свежая lite)</option>
+      <option value="gemini-pro-latest">gemini-pro-latest (умнее, лимиты строже)</option>
+      <option value="gemini-3-pro-preview">gemini-3-pro-preview (умнее, явное имя)</option>
+      <option value="gemini-2.5-flash">gemini-2.5-flash (запасной)</option>
+      <option value="gemini-2.5-pro">gemini-2.5-pro (запасной)</option>
+    </select>
+
+    <label for="speed">Скорость (имитация человека)</label>
+    <select id="speed">
+      <option value="slow">Медленно (безопасно)</option>
+      <option value="normal" selected>Обычно</option>
+      <option value="fast">Быстро (рискованно)</option>
+    </select>
+
+    <label class="checkbox">
+      <input type="checkbox" id="autoNext" checked>
+      Автоматически переходить к следующему заданию
+    </label>
+
+    <button id="saveBtn" class="secondary">Сохранить настройки</button>
+  </section>
+
+  <section class="controls">
+    <button id="startBtn" class="primary">▶ Запустить</button>
+    <button id="stopBtn" class="danger" disabled>■ Остановить</button>
+  </section>
+
+  <section class="status">
+    <div class="status-row">
+      <span>Статус:</span>
+      <strong id="statusText">остановлен</strong>
+    </div>
+    <div class="status-row">
+      <span>Решено:</span>
+      <strong id="solvedCount">0</strong>
+    </div>
+    <div class="status-row">
+      <span>Ошибок:</span>
+      <strong id="errorCount">0</strong>
+    </div>
+  </section>
+
+  <section class="log">
+    <h3>Лог</h3>
+    <div id="logBox"></div>
+  </section>
+
+  <footer>
+    <small>
+      Открой задание на yaklass.ru и нажми «Запустить».
+      Расширение само пройдёт теорию и попробует решить задачи.
+    </small>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

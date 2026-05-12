@@ -1,0 +1,217 @@
+* {
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  width: 360px;
+  margin: 0;
+  padding: 12px 14px 14px;
+  background: #f6f8fb;
+  color: #1f2937;
+  font-size: 13px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+h1 {
+  font-size: 16px;
+  margin: 0;
+  color: #1e40af;
+}
+
+.version {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+section {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin: 6px 0 4px;
+  font-size: 12px;
+  color: #374151;
+}
+
+input[type="password"],
+input[type="text"],
+select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.row {
+  display: flex;
+  gap: 4px;
+}
+
+.row input {
+  flex: 1;
+}
+
+.icon-btn {
+  width: 32px;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.icon-btn:hover {
+  background: #e5e7eb;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 400;
+  margin-top: 8px;
+  cursor: pointer;
+}
+
+.checkbox input {
+  width: auto;
+}
+
+.hint {
+  display: inline-block;
+  font-size: 11px;
+  color: #2563eb;
+  text-decoration: none;
+  margin: 2px 0 4px;
+}
+
+.hint:hover {
+  text-decoration: underline;
+}
+
+button {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.primary {
+  background: #2563eb;
+  color: #fff;
+  flex: 1;
+}
+
+.primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.danger {
+  background: #dc2626;
+  color: #fff;
+  flex: 1;
+}
+
+.danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.secondary {
+  background: #f3f4f6;
+  color: #1f2937;
+  border: 1px solid #d1d5db;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.secondary:hover {
+  background: #e5e7eb;
+}
+
+.controls {
+  display: flex;
+  gap: 6px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.status-row strong {
+  color: #1e40af;
+}
+
+.log h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+#logBox {
+  height: 110px;
+  overflow-y: auto;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.log-entry {
+  margin-bottom: 2px;
+  word-break: break-word;
+}
+
+.log-entry.info { color: #93c5fd; }
+.log-entry.success { color: #86efac; }
+.log-entry.warn { color: #fcd34d; }
+.log-entry.error { color: #fca5a5; }
+.log-entry .ts { color: #64748b; margin-right: 6px; }
+
+footer {
+  margin-top: 4px;
+  text-align: center;
+  color: #6b7280;
+}
+
+footer small {
+  font-size: 11px;
+  line-height: 1.4;
+}
