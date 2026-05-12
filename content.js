@@ -270,7 +270,7 @@
     "прочитано", "прочитал", "я прочитал", "я прочитал(а)",
     "понятно", "я понял", "я понял(а)",
   ];
-  const BTN_CHECK = ["проверить", "ответить", "отправить ответ", "check", "submit"];
+  const BTN_CHECK = ["проверить", "ответить", "отправить ответ", "сохранить", "check", "submit"];
   const BTN_FINISH = ["закончить попытку", "завершить попытку", "завершить", "закончить", "finish"];
 
   // Buttons that mean "the test is over, return to the list". Their
@@ -450,7 +450,99 @@
       });
     }
 
+    // Drag-and-drop task (e.g. "заполни пропуски в таблице"). We
+    // detect a pool of draggable chips + a set of drop zones inside the
+    // task container. This is appended as a single "drag_match" item.
+    const dragItem = extractDragDrop(container);
+    if (dragItem) {
+      dragItem.id = ++id;
+      items.push(dragItem);
+      log(`Найден drag-and-drop: ${dragItem.pool.length} плиток → ${dragItem.zones.length} ячеек`, "info");
+    }
+
     return items;
+  }
+
+  // Detect a drag-and-drop task in the container. Returns a partial
+  // form-item (without id) or null. Looks for two things:
+  //   1) a pool of draggable elements (HTML5 `draggable=true` or classes
+  //      containing "draggable"/"drag"/"option"/"answer");
+  //   2) drop zones (classes containing "drop"/"dropzone"/"droppable" or
+  //      empty <td> cells inside an answer table).
+  function extractDragDrop(container) {
+    // Pool candidates.
+    const poolSet = new Set();
+    container.querySelectorAll('[draggable="true"]').forEach((e) => poolSet.add(e));
+    container.querySelectorAll('[class*="draggable" i]').forEach((e) => poolSet.add(e));
+    container.querySelectorAll('[class*="ui-draggable" i]').forEach((e) => poolSet.add(e));
+
+    // Drop zone candidates.
+    const zoneSet = new Set();
+    container.querySelectorAll('[class*="droppable" i], [class*="dropzone" i], [class*="drop-zone" i]').forEach((e) => zoneSet.add(e));
+    container.querySelectorAll('[class*="ui-droppable" i]').forEach((e) => zoneSet.add(e));
+    container.querySelectorAll('[class*="answer-cell" i], [data-droppable]').forEach((e) => zoneSet.add(e));
+
+    // Heuristic: empty <td> cells inside an answer table.
+    const tables = container.querySelectorAll("table");
+    for (const t of tables) {
+      for (const c of t.querySelectorAll("td")) {
+        const txt = visibleText(c);
+        if (txt) continue;
+        if (!isVisible(c)) continue;
+        if (c.querySelector("input, select, textarea")) continue;
+        zoneSet.add(c);
+      }
+    }
+
+    const pool = [...poolSet].filter(isVisible);
+    const zones = [...zoneSet].filter(isVisible);
+
+    // Require sensible sizes: at least 2 chips and 2 zones, and the
+    // numbers shouldn't be wildly mismatched (drop zones <= pool size + 4).
+    if (pool.length < 2 || zones.length < 1) return null;
+    if (zones.length > pool.length + 6) return null;
+
+    return {
+      kind: "drag_match",
+      label: "Перетаскивание ответов в ячейки",
+      pool: pool.map((el, i) => ({ index: i, label: visibleText(el).slice(0, 100), el })),
+      zones: zones.map((el, i) => ({ index: i, label: zoneLabel(el).slice(0, 200), el })),
+    };
+  }
+
+  function zoneLabel(zone) {
+    const aria = zone.getAttribute("aria-label") || zone.getAttribute("data-label") || zone.getAttribute("title");
+    if (aria) return aria;
+    // <td> inside a table: combine row-label + col-header.
+    if (zone.tagName === "TD") {
+      const tr = zone.closest("tr");
+      const table = zone.closest("table");
+      let rowLabel = "";
+      if (tr) {
+        const firstCell = tr.querySelector("th, td");
+        if (firstCell && firstCell !== zone) rowLabel = visibleText(firstCell);
+      }
+      let colLabel = "";
+      if (table && tr) {
+        const idx = [...tr.children].indexOf(zone);
+        // Look for column header(s).
+        const headerRows = table.querySelectorAll("thead tr, tr");
+        for (const hr of headerRows) {
+          if (hr === tr) continue;
+          const ths = hr.querySelectorAll("th");
+          if (ths.length && ths[idx]) { colLabel = visibleText(ths[idx]); break; }
+          // Fallback: same column index in first row if first row has th's.
+          const first = hr.children[idx];
+          if (first && (first.tagName === "TH" || hr === table.querySelector("tr"))) {
+            colLabel = visibleText(first);
+            break;
+          }
+        }
+      }
+      const combined = [rowLabel, colLabel].filter(Boolean).join(" \u00d7 ");
+      return combined || "(ячейка)";
+    }
+    return visibleText(zone) || "(пусто)";
   }
 
   // For radio/checkbox: returns true if there's a visible label or ancestor
@@ -658,6 +750,11 @@
         const opts = it.options.map((o, i) => `  ${i}) ${o.label}`).join("\n");
         return `#${it.id} | MULTIPLE CHOICE | label="${it.label}"\n${opts}`;
       }
+      if (it.kind === "drag_match") {
+        const pool = it.pool.map((p) => `  P${p.index}) ${p.label}`).join("\n");
+        const zones = it.zones.map((z) => `  Z${z.index}) ${z.label}`).join("\n");
+        return `#${it.id} | DRAG-AND-DROP MATCH | label="${it.label}"\nPOOL (варианты ответов):\n${pool}\nZONES (куда тащить):\n${zones}`;
+      }
       return "";
     }).filter(Boolean).join("\n\n");
 
@@ -685,6 +782,7 @@
       '  - DROPDOWN → индекс выбранного варианта (целое число)',
       '  - SINGLE CHOICE → индекс выбранного варианта (целое число)',
       '  - MULTI CHOICE → массив индексов выбранных вариантов',
+      '  - DRAG-AND-DROP MATCH → массив [{"zone": <индекс Z>, "option": <индекс P>}, ...]',
       "",
       "Если форма пустая или ответ невозможно определить — верни answers: [].",
       "",
@@ -724,6 +822,19 @@
           const opt = item.options[idx];
           if (opt?.el) {
             await checkRadioOrBox(opt);
+            applied++;
+          }
+        } else if (item.kind === "drag_match") {
+          const pairs = Array.isArray(a.value) ? a.value : [];
+          for (const p of pairs) {
+            const z = item.zones[Number(p?.zone)];
+            const o = item.pool[Number(p?.option)];
+            if (!z?.el || !o?.el) continue;
+            // Re-find the option in the DOM in case it was cloned/replaced.
+            const liveOpt = findMatchingPoolItem(item, o);
+            const sourceEl = liveOpt || o.el;
+            await dragAndDrop(sourceEl, z.el);
+            await sleep(randInt(300, 600));
             applied++;
           }
         } else if (item.kind === "multi_choice") {
@@ -973,6 +1084,96 @@
     }
     opt.el.dispatchEvent(new Event("input", { bubbles: true }));
     opt.el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // -----------------------------
+  // Drag-and-drop simulation
+  // -----------------------------
+  // After a "consume on drop" page mutation, the original `el` reference
+  // we stored may be detached. Try to re-find a pool item by its label.
+  function findMatchingPoolItem(item, opt) {
+    if (opt?.el && opt.el.isConnected) return opt.el;
+    // Search the document for a node with the same trimmed text.
+    const wanted = (opt?.label || "").trim();
+    if (!wanted) return null;
+    const candidates = document.querySelectorAll('[draggable="true"], [class*="draggable" i], [class*="answer-option" i]');
+    for (const c of candidates) {
+      if (!isVisible(c)) continue;
+      if ((visibleText(c) || "").trim() === wanted) return c;
+    }
+    return null;
+  }
+
+  // Generic drag-and-drop: dispatches both HTML5 native drag events and
+  // mouse events. yaklass.ru tasks have historically used both jQuery UI
+  // (mouse events) and HTML5 native draggables, so we fire both.
+  async function dragAndDrop(source, target) {
+    if (!source || !target) return false;
+    try { source.scrollIntoView({ block: "center" }); } catch (_) {}
+    await sleep(120);
+    const sr = source.getBoundingClientRect();
+    const tr = target.getBoundingClientRect();
+    const sx = sr.left + sr.width / 2;
+    const sy = sr.top + sr.height / 2;
+    const tx = tr.left + tr.width / 2;
+    const ty = tr.top + tr.height / 2;
+
+    // HTML5 native drag events with a shared DataTransfer.
+    let dt = null;
+    try { dt = new DataTransfer(); } catch (_) {}
+    const mkDrag = (type, x, y) => {
+      const opts = { bubbles: true, cancelable: true, clientX: x, clientY: y };
+      if (dt) opts.dataTransfer = dt;
+      try {
+        return new DragEvent(type, opts);
+      } catch (_) {
+        return new MouseEvent(type, opts);
+      }
+    };
+    const mkMouse = (type, x, y) => new MouseEvent(type, {
+      bubbles: true, cancelable: true, view: window,
+      clientX: x, clientY: y, button: 0,
+    });
+    const mkPointer = (type, x, y) => new PointerEvent(type, {
+      bubbles: true, cancelable: true, pointerType: "mouse",
+      clientX: x, clientY: y, button: 0, isPrimary: true,
+    });
+
+    // 1) Mouse-based simulation (covers jQuery UI / custom impls). Move
+    //    through several intermediate positions so listeners that look at
+    //    elementFromPoint still see motion.
+    source.dispatchEvent(mkPointer("pointerdown", sx, sy));
+    source.dispatchEvent(mkMouse("mousedown", sx, sy));
+    await sleep(80);
+
+    const steps = 10;
+    for (let i = 1; i <= steps; i++) {
+      const x = sx + (tx - sx) * (i / steps);
+      const y = sy + (ty - sy) * (i / steps);
+      const overEl = document.elementFromPoint(x, y) || target;
+      overEl.dispatchEvent(mkPointer("pointermove", x, y));
+      overEl.dispatchEvent(mkMouse("mousemove", x, y));
+      await sleep(20);
+    }
+    target.dispatchEvent(mkPointer("pointerup", tx, ty));
+    target.dispatchEvent(mkMouse("mouseup", tx, ty));
+    await sleep(80);
+
+    // 2) HTML5 native drag-drop sequence on top, in case the page listens
+    //    for those instead.
+    try {
+      source.dispatchEvent(mkDrag("dragstart", sx, sy));
+      await sleep(40);
+      target.dispatchEvent(mkDrag("dragenter", tx, ty));
+      await sleep(20);
+      target.dispatchEvent(mkDrag("dragover", tx, ty));
+      await sleep(20);
+      target.dispatchEvent(mkDrag("drop", tx, ty));
+      await sleep(20);
+      source.dispatchEvent(mkDrag("dragend", tx, ty));
+    } catch (_) {}
+
+    return true;
   }
   // -----------------------------
   // Auto-resume after page reload
